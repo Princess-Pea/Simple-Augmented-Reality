@@ -65,3 +65,22 @@ if len(matches) > MIN_MATCHES:
     cv2.waitKey(0)
 else:
     print("Not enough matches have been found - %d/%d" % (len(matches), MIN_MATCHES))
+
+# （使用不同的图片）
+cap = cv2.imread('scene2.jpg', 0)    
+model = cv2.imread('model2.jpg', 0)
+
+orb = cv2.ORB_create()              
+bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)  
+kp_model, des_model = orb.detectAndCompute(model, None)  
+kp_frame, des_frame = orb.detectAndCompute(cap, None)
+matches = bf.match(des_model, des_frame)
+matches = sorted(matches, key=lambda x: x.distance)
+
+if len(matches) > MIN_MATCHES:
+    cap = cv2.drawMatches(model, kp_model, cap, kp_frame,
+                          matches[:MIN_MATCHES], 0, flags=2)
+    cv2.imshow('frame', cap)
+    cv2.waitKey(0)
+else:
+    print("Not enough matches have been found - %d/%d" % (len(matches), MIN_MATCHES))
