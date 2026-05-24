@@ -177,45 +177,121 @@ class ARApp:
         P = self.camera_matrix @ np.column_stack((R1, R2, R3, t))
         return P
 
+    # def _render(self, frame, projection):
+    #     """
+    #     Render the 3D OBJ model using perspective projection.
+    #     projection: 3x4 matrix.
+    #     """
+    #     vertices = self.obj.vertices
+    #     scale_mat = np.eye(3) * self.scale
+    #     # 模型在参考平面上的中心位置
+    #     center_x, center_y = self.ref_w / 2, self.ref_h / 2
+
+    #     for face in self.obj.faces:
+    #         face_vertices = face[0]
+    #         # 获取 3D 点 (N, 3)
+    #         points_3d = np.array([vertices[vertex - 1] for vertex in face_vertices])
+    #         # 缩放
+    #         points_3d = points_3d @ scale_mat
+    #         # 平移到参考平面中心
+    #         points_3d[:, 0] += center_x
+    #         points_3d[:, 1] += center_y
+    #         # 转换为齐次坐标 (N, 4)
+    #         points_h = np.hstack([points_3d, np.ones((points_3d.shape[0], 1))])
+    #         # 投影到图像平面 (N, 3)
+    #         points_proj = projection @ points_h.T   # (3, N)
+    #         points_proj = points_proj.T             # (N, 3)
+    #         # 透视除法
+    #         with np.errstate(divide='ignore', invalid='ignore'):
+    #             points_2d = points_proj[:, :2] / points_proj[:, 2:3]
+    #         # 过滤掉 z<=0 的点（在相机后方）或无穷大
+    #         valid = (points_proj[:, 2] > 0) & np.isfinite(points_2d).all(axis=1)
+    #         if not np.all(valid):
+    #             # 如果面中有点不可见，简单跳过（更好的做法是裁剪，但为了简单直接跳过）
+    #             continue
+    #         imgpts = np.int32(points_2d)
+    #         # 颜色处理
+    #         color = (0, 0, 255)  # 默认红色
+    #         if len(face) > 3 and face[3]:
+    #             color = self._hex_to_rgb(face[3])
+    #         # 绘制填充多边形
+    #         cv2.fillConvexPoly(frame, imgpts, color)
+    #     return frame
+
     def _render(self, frame, projection):
-        """
-        Render the 3D OBJ model using perspective projection.
-        projection: 3x4 matrix.
-        """
         vertices = self.obj.vertices
         scale_mat = np.eye(3) * self.scale
-        # 模型在参考平面上的中心位置
         center_x, center_y = self.ref_w / 2, self.ref_h / 2
+        
+        # 调整光源方向，让光从斜前方打过来，看起来更有质感
+        light_dir = np.array([0.5, -0.5, 1.0], dtype=np.float32)
+        light_dir /= np.linalg.norm(light_dir)
+
+        faces_to_render = []
 
         for face in self.obj.faces:
             face_vertices = face[0]
             # 获取 3D 点 (N, 3)
-            points_3d = np.array([vertices[vertex - 1] for vertex in face_vertices])
+            raw_points = np.array([vertices[vertex - 1] for vertex in face_vertices])
+            
+            ### 修复点 1：旋转模型，让它站起来
+            points_3d = np.zeros_like(raw_points)
+            points_3d[:, 0] = raw_points[:, 0]  # X 保持不变
+            points_3d[:, 1] = raw_points[:, 2] # 原本的深度变成现在的平面 Y
+            points_3d[:, 2] = raw_points[:, 1]  # 原本的高度变成现在的平面 Z (垂直纸面)
+
             # 缩放
             points_3d = points_3d @ scale_mat
-            # 平移到参考平面中心
-            points_3d[:, 0] += center_x
-            points_3d[:, 1] += center_y
-            # 转换为齐次坐标 (N, 4)
-            points_h = np.hstack([points_3d, np.ones((points_3d.shape[0], 1))])
-            # 投影到图像平面 (N, 3)
-            points_proj = projection @ points_h.T   # (3, N)
-            points_proj = points_proj.T             # (N, 3)
-            # 透视除法
-            with np.errstate(divide='ignore', invalid='ignore'):
-                points_2d = points_proj[:, :2] / points_proj[:, 2:3]
-            # 过滤掉 z<=0 的点（在相机后方）或无穷大
-            valid = (points_proj[:, 2] > 0) & np.isfinite(points_2d).all(axis=1)
-            if not np.all(valid):
-                # 如果面中有点不可见，简单跳过（更好的做法是裁剪，但为了简单直接跳过）
-                continue
-            imgpts = np.int32(points_2d)
-            # 颜色处理
-            color = (0, 0, 255)  # 默认红色
-            if len(face) > 3 and face[3]:
-                color = self._hex_to_rgb(face[3])
-            # 绘制填充多边形
-            cv2.fillConvexPoly(frame, imgpts, color)
+            
+            # 计算法线和光照强度
+            v1 = points_3d[1] - points_3d[0]
+            v2 = points_3d[2] - points_3d[0]
+            normal = np.cross(v1, v2)
+            norm_val = np.linalg.norm(normal)
+            
+            if norm_val > 1e-6:
+                normal /= norm_val
+                intensity = np.dot(normal, light_dir)
+                intensity = max(0.2, min(1.0, intensity))
+            else:
+                intensity = 0.5
+
+            # 平移到参考图中心
+            render_points_3d = points_3d.copy()
+            render_points_3d[:, 0] += center_x
+            render_points_3d[:, 1] += center_y
+            
+            # 投影
+            points_h = np.hstack([render_points_3d, np.ones((render_points_3d.shape[0], 1))])
+            points_proj = projection @ points_h.T
+            points_proj = points_proj.T
+            points_2d = points_proj[:, :2] / points_proj[:, 2:3]
+            
+            avg_z = np.mean(points_proj[:, 2])
+
+            if avg_z > 0:
+                ### 修复点 2：设置一个默认的“狐狸橙”
+                # 如果没有读到颜色，我们给一个 BGR 颜色：(30, 105, 230) 
+                base_color = (30, 105, 230) 
+                
+                # 如果 OBJ 里有颜色信息则使用 OBJ 的
+                if len(face) > 3 and face[3]:
+                    base_color = self._hex_to_rgb(face[3])
+                
+                shaded_color = [int(c * intensity) for c in base_color]
+                
+                faces_to_render.append({
+                    'z': avg_z,
+                    'pts': np.int32(points_2d),
+                    'color': shaded_color
+                })
+
+        # 画家算法排序
+        faces_to_render.sort(key=lambda x: x['z'], reverse=True)
+
+        for f in faces_to_render:
+            cv2.fillConvexPoly(frame, f['pts'], tuple(f['color']))
+            
         return frame
 
     @staticmethod

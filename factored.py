@@ -152,33 +152,116 @@ class ARApp:
         projection = np.stack((col1, col2, col3, col3), axis=1)  # translation is col3
         return np.dot(self.camera_matrix, projection)
 
+    # def _render(self, frame, projection):
+    #     """
+    #     Render the 3D OBJ model onto the frame using the projection matrix.
+    #     """
+    #     vertices = self.obj.vertices
+    #     # Apply scaling
+    #     scale_mat = np.eye(3) * self.scale
+    #     # Center the model on the reference plane
+    #     center_x, center_y = self.ref_w / 2, self.ref_h / 2
+
+    #     for face in self.obj.faces:
+    #         # Each face is a tuple: (vertices, normals, texture, material)
+    #         face_vertices = face[0]
+    #         points = np.array([vertices[vertex - 1] for vertex in face_vertices])
+    #         points = np.dot(points, scale_mat)  # apply scale
+    #         # Translate to the center of the reference image
+    #         points = np.array([[p[0] + center_x, p[1] + center_y, p[2]] for p in points])
+    #         # Project 3D points to 2D
+    #         dst = cv2.perspectiveTransform(points.reshape(-1, 1, 3), projection)
+    #         if dst is None:
+    #             continue
+    #         imgpts = np.int32(dst)
+    #         # Optional: color from OBJ material (if available)
+    #         color = (0, 0, 255)  # default red
+    #         if len(face) > 3 and face[3]:
+    #             color = self._hex_to_rgb(face[3])
+    #         cv2.fillConvexPoly(frame, imgpts, color)
+    #     return frame
+
     def _render(self, frame, projection):
         """
-        Render the 3D OBJ model onto the frame using the projection matrix.
+        渲染 3D OBJ 模型，包含简单的 Lambert 遮蔽（光照）和深度排序。
         """
         vertices = self.obj.vertices
-        # Apply scaling
         scale_mat = np.eye(3) * self.scale
-        # Center the model on the reference plane
         center_x, center_y = self.ref_w / 2, self.ref_h / 2
+        
+        # 1. 定义虚拟光源方向（在模型坐标系中）
+        # [0, 0, 1] 表示光从相机正对着模型打过去
+        # [0, -1, 1] 表示光从斜上方打下来
+        light_dir = np.array([0, -1, 1], dtype=np.float32)
+        light_dir /= np.linalg.norm(light_dir) # 归一化
+
+        # 用于存储待渲染的面及其深度信息
+        faces_to_render = []
 
         for face in self.obj.faces:
-            # Each face is a tuple: (vertices, normals, texture, material)
             face_vertices = face[0]
-            points = np.array([vertices[vertex - 1] for vertex in face_vertices])
-            points = np.dot(points, scale_mat)  # apply scale
-            # Translate to the center of the reference image
-            points = np.array([[p[0] + center_x, p[1] + center_y, p[2]] for p in points])
-            # Project 3D points to 2D
-            dst = cv2.perspectiveTransform(points.reshape(-1, 1, 3), projection)
-            if dst is None:
-                continue
-            imgpts = np.int32(dst)
-            # Optional: color from OBJ material (if available)
-            color = (0, 0, 255)  # default red
-            if len(face) > 3 and face[3]:
-                color = self._hex_to_rgb(face[3])
-            cv2.fillConvexPoly(frame, imgpts, color)
+            # 获取当前面的 3D 顶点 (N, 3)
+            points_3d = np.array([vertices[vertex - 1] for vertex in face_vertices])
+            
+            # 应用缩放
+            points_3d = points_3d @ scale_mat
+            
+            # --- 计算光照强度 ---
+            # 取前三个点计算面法线 (向量叉乘)
+            v1 = points_3d[1] - points_3d[0]
+            v2 = points_3d[2] - points_3d[0]
+            normal = np.cross(v1, v2)
+            norm_val = np.linalg.norm(normal)
+            
+            if norm_val > 1e-6:
+                normal /= norm_val
+                # 点积计算强度：normal · light_dir
+                intensity = np.dot(normal, light_dir)
+                # 限制在 [0.2, 1.0] 之间，0.2 是基础环境光
+                intensity = max(0.2, min(1.0, intensity))
+            else:
+                intensity = 0.5 # 兜底值
+
+            # --- 坐标变换与投影 ---
+            # 平移到参考图中心
+            render_points_3d = points_3d.copy()
+            render_points_3d[:, 0] += center_x
+            render_points_3d[:, 1] += center_y
+            
+            # 转换为齐次坐标并投影
+            points_h = np.hstack([render_points_3d, np.ones((render_points_3d.shape[0], 1))])
+            points_proj = projection @ points_h.T # (3, N)
+            points_proj = points_proj.T           # (N, 3)
+
+            # 透视除法
+            points_2d = points_proj[:, :2] / points_proj[:, 2:3]
+            
+            # 计算该面的平均深度 (Z)，用于后面的排序
+            avg_z = np.mean(points_proj[:, 2])
+
+            if avg_z > 0: # 仅处理在相机前方的面
+                # 处理颜色
+                base_color = (150, 150, 150) # 默认灰色
+                if len(face) > 3 and face[3]:
+                    base_color = self._hex_to_rgb(face[3])
+                
+                # 应用光照强度到颜色（注意 OpenCV 是 BGR）
+                shaded_color = [int(c * intensity) for c in base_color]
+                
+                faces_to_render.append({
+                    'z': avg_z,
+                    'pts': np.int32(points_2d),
+                    'color': shaded_color
+                })
+
+        # 2. 画家算法：按深度 Z 从远到近排序（从大到小）
+        # 这样近处的面会遮挡远处的面
+        faces_to_render.sort(key=lambda x: x['z'], reverse=True)
+
+        # 3. 绘制排序后的面
+        for f in faces_to_render:
+            cv2.fillConvexPoly(frame, f['pts'], tuple(f['color']))
+            
         return frame
     
     def load_camera_params():
