@@ -1,3 +1,4 @@
+import numpy as np
 import matplotlib.pyplot as plt
 import cv2
 print("OpenCV 版本:", cv2.__version__)
@@ -81,4 +82,24 @@ if len(matches) > MIN_MATCHES:
     cv2.waitKey(0)
 else:
     print("Not enough matches have been found - %d/%d" % (len(matches), MIN_MATCHES))
+
+
+# assuming matches stores the matches found and 
+# returned by bf.match(des_model, des_frame)
+# differenciate between source points and destination points
+src_pts = np.float32([kp_model[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+dst_pts = np.float32([kp_frame[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+# compute Homography
+M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+ 
+# Draw a rectangle that marks the found model in the frame
+h, w = model.shape
+pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
+# project corners into frame
+dst = cv2.perspectiveTransform(pts, M)  
+# connect them with lines
+img_rgb = cv2.imread('scene.jpg')
+img2 = cv2.polylines(img_rgb, [np.int32(dst)], True, 255, 3, cv2.LINE_AA) 
+cv2.imshow('frame', cap)
+cv2.waitKey(0)
 
