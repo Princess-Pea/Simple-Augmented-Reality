@@ -6,9 +6,6 @@
 
 ## 🚀 项目功能展示
 
-> **提示：** 建议在这里上传一张你运行成功的截图或 GIF。
-> ![AR Detection Demo](path/to/your/screenshot.png)
-
 - [x] **特征提取**：利用 ORB 算法提取目标物体与场景的关键点。
 - [x] **特征匹配**：使用 BFMatcher (Brute-Force) 进行双向交叉验证匹配。
 - [x] **姿态估计**：通过 RANSAC 算法计算单应性矩阵（Homography）。
