@@ -1,7 +1,4 @@
-import cv2
 import matplotlib.pyplot as plt
-
-
 import cv2
 print("OpenCV 版本:", cv2.__version__)
 
@@ -84,3 +81,4 @@ if len(matches) > MIN_MATCHES:
     cv2.waitKey(0)
 else:
     print("Not enough matches have been found - %d/%d" % (len(matches), MIN_MATCHES))
+
